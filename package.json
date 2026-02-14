@@ -1,0 +1,42 @@
+{
+  "name": "@yume-chan/h264bsd",
+  "version": "1.0.0",
+  "description": "WebAssembly build of Android H264BSD decoder",
+  "main": "index.js",
+  "scripts": {},
+  "keywords": [
+    "wasm",
+    "WebAssembly",
+    "emscripten",
+    "H.264",
+    "H264",
+    "AVC",
+    "Decoder",
+    "Decoding",
+    "Video"
+  ],
+  "homepage": "https://github.com/yume-chan/h264bsd#README",
+  "bugs": {
+    "url": "https://github.com/yume-chan/h264bsd/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yume-chan/h264bsd"
+  },
+  "author": {
+    "name": "Simon Chan",
+    "url": "https://github.com/yume-chan"
+  },
+  "license": "Apache-2.0",
+  "packageManager": "pnpm@10.25.0",
+  "type": "module",
+  "exports": {
+    ".": {
+      "default": "./h264bsd.mjs",
+      "types": "./h264bsd.d.ts"
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^25.2.3"
+  }
+}
