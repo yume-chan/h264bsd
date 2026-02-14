@@ -26,7 +26,7 @@
           h264bsdDecodeSliceHeader
           NumSliceGroupChangeCycleBits
           RefPicListReordering
-          DecRefPicMarking
+          h264bsdDecRefPicMarking
           CheckPpsId
           CheckFrameNum
           CheckIdrPicId
@@ -66,11 +66,6 @@ static u32 RefPicListReordering(strmData_t *, refPicListReordering_t *,
 
 static u32 NumSliceGroupChangeCycleBits(u32 picSizeInMbs,
     u32 sliceGroupChangeRate);
-
-static u32 DecRefPicMarking(strmData_t *pStrmData,
-    decRefPicMarking_t *pDecRefPicMarking, nalUnitType_e nalUnitType,
-    u32 numRefFrames);
-
 
 /*------------------------------------------------------------------------------
 
@@ -302,7 +297,7 @@ u32 h264bsdDecodeSliceHeader(strmData_t *pStrmData, sliceHeader_t *pSliceHeader,
 
     if (pNalUnit->nalRefIdc != 0)
     {
-        tmp = DecRefPicMarking(pStrmData, &pSliceHeader->decRefPicMarking,
+        tmp = h264bsdDecRefPicMarking(pStrmData, &pSliceHeader->decRefPicMarking,
             pNalUnit->nalUnitType, pSeqParamSet->numRefFrames);
         if (tmp != HANTRO_OK)
             return(tmp);
@@ -550,7 +545,7 @@ u32 RefPicListReordering(strmData_t *pStrmData,
 
 /*------------------------------------------------------------------------------
 
-    Function: DecRefPicMarking
+    Function: h264bsdDecRefPicMarking
 
         Functional description:
             Decode decoded reference picture marking syntax elements from
@@ -570,7 +565,7 @@ u32 RefPicListReordering(strmData_t *pStrmData,
 
 ------------------------------------------------------------------------------*/
 
-u32 DecRefPicMarking(strmData_t *pStrmData,
+u32 h264bsdDecRefPicMarking(strmData_t *pStrmData,
     decRefPicMarking_t *pDecRefPicMarking, nalUnitType_e nalUnitType,
     u32 numRefFrames)
 {
@@ -1510,5 +1505,3 @@ u32 h264bsdCheckPriorPicsFlag(u32 * noOutputOfPriorPicsFlag,
 
 }
 /*lint +e715 */
-
-

@@ -70,6 +70,11 @@ H264DEC_EVALUATION      Compile evaluation version, restricts number of frames
 
 #ifdef H264DEC_TRACE
 #include <stdio.h>
+
+void H264SwDecTrace(char *string) {
+    printf("%s\n", string);
+}
+
 #define DEC_API_TRC(str)    H264SwDecTrace(str)
 #else
 #define DEC_API_TRC(str)
@@ -78,10 +83,6 @@ H264DEC_EVALUATION      Compile evaluation version, restricts number of frames
 #ifdef H264DEC_EVALUATION
 #define H264DEC_EVALUATION_LIMIT   500
 #endif
-
-void H264SwDecTrace(char *string) {
-    UNUSED(string);
-}
 
 void* H264SwDecMalloc(u32 size, u32 num) {
     if (size > UINT32_MAX / num) {
@@ -576,5 +577,3 @@ H264SwDecRet H264SwDecNextPicture(H264SwDecInst decInst,
     }
 
 }
-
-

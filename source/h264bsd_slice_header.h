@@ -182,5 +182,10 @@ u32 h264bsdCheckPriorPicsFlag(u32 * noOutputOfPriorPicsFlag,
                               const picParamSet_t * pPicParamSet,
                               nalUnitType_e nalUnitType);
 
-#endif /* #ifdef H264SWDEC_SLICE_HEADER_H */
+u32 h264bsdDecRefPicMarking(
+    strmData_t *pStrmData,
+    decRefPicMarking_t *pDecRefPicMarking,
+    nalUnitType_e nalUnitType,
+    u32 numRefFrames);
 
+#endif /* #ifdef H264SWDEC_SLICE_HEADER_H */
