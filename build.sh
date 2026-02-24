@@ -5,11 +5,14 @@ SRC_DIR="source"
 OBJ_DIR="obj"
 LIB_OBJ="$OBJ_DIR/h264bsd.o"
 
-CFLAGS="-flto -O3 -Iinc"
-# debug build
-# CFLAGS="-g3 -gsource-map=inline -Iinc -DH264DEC_TRACE"
-
-EXE_FLAGS="-sNO_DYNAMIC_EXECUTION -sEVAL_CTORS=2"
+DEBUG=false
+if [[ "$DEBUG" == "true" ]]; then
+    CFLAGS="-g3 -gsource-map=inline -Iinc -DH264DEC_TRACE -D_ERROR_PRINT"
+    EXE_FLAGS=""
+else
+    CFLAGS="-flto -O3 -Iinc -sSTRICT"
+    EXE_FLAGS="-sNO_DYNAMIC_EXECUTION -sEVAL_CTORS=2"
+fi
 
 echo "Compiling .c files from $SRC_DIR..."
 
@@ -33,16 +36,17 @@ echo "Compiling to WebAssembly..."
 mkdir -p wasm
 rm -rf wasm/*
 
-emcc -o wasm/h264bsd.mjs \
+em++ -o wasm/h264bsd.mjs \
   $CFLAGS \
   $EXE_FLAGS \
   $LIB_OBJ \
   bind.cpp \
   -std=c++20 \
+  -sEXIT_RUNTIME=0 \
+  -sENVIRONMENT=web,worker \
   -sALLOW_MEMORY_GROWTH \
-  -sENVIRONMENT=worker \
-  -sMODULARIZE \
-  -sWASM_BIGINT \
+  -sIGNORE_MISSING_MAIN \
+  -sTEXTDECODER=2 \
   -lembind \
   -sEMBIND_AOT \
   --emit-tsd h264bsd.d.ts

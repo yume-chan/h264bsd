@@ -1,6 +1,6 @@
 {
   "name": "@yume-chan/h264bsd",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "WebAssembly build of Android H264BSD decoder",
   "main": "index.js",
   "scripts": {},
@@ -32,8 +32,8 @@
   "type": "module",
   "exports": {
     ".": {
-      "default": "./h264bsd.mjs",
-      "types": "./h264bsd.d.ts"
+      "types": "./h264bsd.d.ts",
+      "default": "./h264bsd.mjs"
     }
   },
   "devDependencies": {

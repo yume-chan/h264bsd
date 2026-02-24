@@ -1,8 +1,14 @@
-#include <format>
 
 #include <emscripten/bind.h>
 
+extern "C"
+{
 #include "inc/H264SwDecApi.h"
+#include "source/h264bsd_container.h"
+#include "source/h264bsd_decoder.h"
+}
+
+#include <bit>
 
 using namespace emscripten;
 
@@ -19,26 +25,52 @@ struct Picture
     H264SwDecInfo info;
     Uint8Array bytes;
     uint32_t picId;
-    uint32_t isIdrPicture;
+    bool isIdr;
     uint32_t nbrOfErrMBs;
+};
+
+enum class DecodeResultCode
+{
+    Ready = H264BSD_RDY,
+    PictureReady = H264BSD_PIC_RDY,
+    HeadersReady = H264BSD_HDRS_RDY,
+    Error = H264BSD_ERROR,
+    ParamSetError = H264BSD_PARAM_SET_ERROR,
+    MemoryError = H264BSD_MEMALLOC_ERROR,
 };
 
 struct DecodeResult
 {
-    H264SwDecRet result;
-    intptr_t read;
+    DecodeResultCode code;
+    uint32_t read;
     std::optional<Picture> picture;
+    uint32_t extraPictureCount;
 };
+
+struct FlushResult
+{
+    std::optional<Picture> picture;
+    uint32_t extraPictureCount;
+};
+
+constexpr uint32_t INITIAL_BUFFER_SIZE = 1024;
 
 class Decoder
 {
 private:
-    H264SwDecInst instance;
+    union
+    {
+        H264SwDecInst instance;
+        decContainer_t *container;
+    };
+
+    uint8_t *buffer;
+    size_t bufferSize;
 
     H264SwDecInfo info;
-    uintptr_t picture_size;
+    size_t pictureSize;
 
-    void get_info()
+    void getInfo()
     {
         auto result = H264SwDecGetInfo(instance, &info);
         if (result != H264SWDEC_OK)
@@ -47,7 +79,7 @@ private:
             Error.new_(val::u8string("Can't get info")).throw_();
         }
 
-        picture_size = info.picWidth * info.picHeight * 3 / 2;
+        pictureSize = info.picWidth * info.picHeight * 3 / 2;
 
         if (!info.croppingFlag)
         {
@@ -56,76 +88,135 @@ private:
         }
     }
 
+    uint32_t getPictureCount()
+    {
+        auto *dpb = container->storage.dpb;
+        return dpb->numOut - dpb->outIndex;
+    }
+
+    std::pair<DecodeResultCode, uint32_t> decodeInternal(
+        uint8_t *data,
+        uint32_t length,
+        uint32_t picId)
+    {
+        DecodeResultCode code = DecodeResultCode::Error;
+        uint32_t totalReadBytes = 0;
+
+        while (length > 0)
+        {
+            uint32_t readBytes;
+            code = static_cast<DecodeResultCode>(
+                h264bsdDecode(
+                    &container->storage,
+                    data,
+                    length,
+                    picId,
+                    &readBytes));
+
+            totalReadBytes += readBytes;
+
+            switch (code)
+            {
+            case DecodeResultCode::Ready:
+                break;
+            case DecodeResultCode::PictureReady:
+                if (getPictureCount() != 0)
+                {
+                    goto finish;
+                }
+                break;
+            case DecodeResultCode::HeadersReady:
+                if (container->storage.dpb->flushed && getPictureCount() != 0)
+                {
+                    container->decStat = decContainer_t::NEW_HEADERS;
+                    goto finish;
+                }
+
+                getInfo();
+                break;
+            default:
+                goto finish;
+            }
+
+            data += readBytes;
+            length -= readBytes;
+        }
+
+    finish:
+        return {code, totalReadBytes};
+    }
+
 public:
-    Decoder() : info{}, picture_size(0)
+    Decoder()
+        : buffer(new uint8_t[INITIAL_BUFFER_SIZE]),
+          bufferSize(INITIAL_BUFFER_SIZE),
+          info{},
+          pictureSize(0)
     {
         H264SwDecInit(&instance, 0);
     }
 
     ~Decoder()
     {
+        delete[] buffer;
         H264SwDecRelease(instance);
     }
 
-    DecodeResult decode(std::string data, uint32_t picId, uint32_t intraConcealmentMethod)
+    void setIntraConcealmentMethod(uint32_t intraConcealmentMethod)
     {
-        H264SwDecInput input{
-            (uint8_t *)data.data(),
-            data.size(),
-            picId,
-            intraConcealmentMethod};
-        H264SwDecRet result;
-        H264SwDecOutput output;
-        while (input.dataLen > 0)
-        {
-            result = H264SwDecDecode(instance, &input, &output);
-
-            if (result == H264SWDEC_HDRS_RDY_BUFF_NOT_EMPTY)
-            {
-                get_info();
-            }
-            if (result == H264SWDEC_PIC_RDY || result == H264SWDEC_PIC_RDY_BUFF_NOT_EMPTY)
-            {
-                H264SwDecPicture picture;
-                H264SwDecNextPicture(instance, &picture, false);
-
-                return {
-                    .result = result,
-                    .read = output.pStrmCurrPos - (uint8_t *)data.data(),
-                    .picture = Picture{
-                        .info = info,
-                        .bytes = Uint8Array(val(typed_memory_view(picture_size, (uint8_t *)picture.pOutputPicture))),
-                        .picId = picture.picId,
-                        .isIdrPicture = picture.isIdrPicture,
-                        .nbrOfErrMBs = picture.nbrOfErrMBs}};
-            }
-            else if (result < 0)
-            {
-                break;
-            }
-
-            input.dataLen -= output.pStrmCurrPos - input.pStream;
-            input.pStream = output.pStrmCurrPos;
-        }
-
-        return {result, output.pStrmCurrPos - (uint8_t *)data.data(), std::nullopt};
+        container->storage.intraConcealmentFlag = intraConcealmentMethod;
     }
 
-    std::vector<Picture> flush()
+    DecodeResult decode(Uint8Array data, uint32_t picId)
     {
-        std::vector<Picture> pictures;
-        H264SwDecPicture picture;
-        H264SwDecRet result;
-        while ((result = H264SwDecNextPicture(instance, &picture, true)) == H264SWDEC_PIC_RDY)
+        if (container->decStat == decContainer_t::NEW_HEADERS)
         {
-            pictures.push_back(Picture{
-                .info = info,
-                .bytes = Uint8Array(val(typed_memory_view(picture_size, (uint8_t *)picture.pOutputPicture))),
-                .picId = picture.picId,
-                .isIdrPicture = picture.isIdrPicture,
-                .nbrOfErrMBs = picture.nbrOfErrMBs});
+            getInfo();
+            container->decStat = decContainer_t::INITIALIZED;
         }
-        return pictures;
+
+        auto length = data["length"].as<uint32_t>();
+        if (length > bufferSize)
+        {
+            delete[] buffer;
+
+            auto capacity = std::bit_ceil(length);
+            buffer = new uint8_t[capacity];
+            bufferSize = capacity;
+        }
+
+        val bufferView = val(typed_memory_view(length, buffer));
+        bufferView.call<void>("set", data);
+
+        auto [result, readBytes] = decodeInternal(buffer, length, picId);
+        return {
+            result,
+            readBytes,
+            getNextPicture(),
+            getPictureCount(),
+        };
+    }
+
+    std::optional<Picture> getNextPicture()
+    {
+        auto result = h264bsdDpbOutputPicture(container->storage.dpb);
+        if (result != nullptr)
+        {
+            return Picture{
+                .info = info,
+                .bytes = Uint8Array(val(typed_memory_view(pictureSize, result->data))),
+                .picId = result->picId,
+                .isIdr = result->isIdr != 0,
+                .nbrOfErrMBs = result->numErrMbs,
+            };
+        }
+        return std::nullopt;
+    }
+
+    FlushResult flush()
+    {
+        h264bsdFlushBuffer(&container->storage);
+        return {getNextPicture(), getPictureCount()};
     }
 };
 
@@ -133,24 +224,11 @@ EMSCRIPTEN_BINDINGS(h264bsd)
 {
     register_type<Uint8Array>("Uint8Array");
 
-    value_object<H264SwDecApiVersion>("H264SwDecApiVersion")
+    value_object<H264SwDecApiVersion>("Version")
         .field("major", &H264SwDecApiVersion::major)
         .field("minor", &H264SwDecApiVersion::minor);
 
-    function("get_api_version", &H264SwDecGetAPIVersion);
-
-    enum_<H264SwDecRet>("Result", enum_value_type::number)
-        .value("OK", H264SWDEC_OK)
-        .value("STRM_PROCESSED", H264SWDEC_STRM_PROCESSED)
-        .value("PIC_RDY", H264SWDEC_PIC_RDY)
-        .value("PIC_RDY_BUFF_NOT_EMPTY", H264SWDEC_PIC_RDY_BUFF_NOT_EMPTY)
-        .value("HDRS_RDY_BUFF_NOT_EMPTY", H264SWDEC_HDRS_RDY_BUFF_NOT_EMPTY)
-        .value("PARAM_ERR", H264SWDEC_PARAM_ERR)
-        .value("STRM_ERR", H264SWDEC_STRM_ERR)
-        .value("NOT_INITIALIZED", H264SWDEC_NOT_INITIALIZED)
-        .value("MEMFAIL", H264SWDEC_MEMFAIL)
-        .value("INITFAIL", H264SWDEC_INITFAIL)
-        .value("HDRS_NOT_RDY", H264SWDEC_HDRS_NOT_RDY);
+    function("getApiVersion", &H264SwDecGetAPIVersion);
 
     value_object<CropParams>("CropParams")
         .field("cropLeftOffset", &CropParams::cropLeftOffset)
@@ -173,19 +251,33 @@ EMSCRIPTEN_BINDINGS(h264bsd)
         .field("info", &Picture::info)
         .field("bytes", &Picture::bytes)
         .field("picId", &Picture::picId)
-        .field("isIdrPicture", &Picture::isIdrPicture)
+        .field("isIdr", &Picture::isIdr)
         .field("nbrOfErrMBs", &Picture::nbrOfErrMBs);
 
     register_optional<Picture>();
-    register_vector<Picture>("PictureArray");
+
+    enum_<DecodeResultCode>("DecodeResultCode", enum_value_type::number)
+        .value("Ready", DecodeResultCode::Ready)
+        .value("PictureReady", DecodeResultCode::PictureReady)
+        .value("HeadersReady", DecodeResultCode::HeadersReady)
+        .value("Error", DecodeResultCode::Error)
+        .value("ParamSetError", DecodeResultCode::ParamSetError)
+        .value("MemoryError", DecodeResultCode::MemoryError);
 
     value_object<DecodeResult>("DecodeResult")
-        .field("result", &DecodeResult::result)
+        .field("code", &DecodeResult::code)
         .field("read", &DecodeResult::read)
-        .field("picture", &DecodeResult::picture);
+        .field("picture", &DecodeResult::picture)
+        .field("extraPictureCount", &DecodeResult::extraPictureCount);
+
+    value_object<FlushResult>("FlushResult")
+        .field("picture", &FlushResult::picture)
+        .field("extraPictureCount", &FlushResult::extraPictureCount);
 
     class_<Decoder>("Decoder")
         .constructor()
-        .function("decode(data, picId, intraConcealmentMethod)", &Decoder::decode)
+        .function("setIntraConcealmentMethod(method)", &Decoder::setIntraConcealmentMethod)
+        .function("decode(data, picId)", &Decoder::decode)
+        .function("getNextPicture", &Decoder::getNextPicture)
         .function("flush", &Decoder::flush);
 }
