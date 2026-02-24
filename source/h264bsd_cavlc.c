@@ -24,7 +24,6 @@
      4. Local function prototypes
      5. Functions
           DecodeCoeffToken
-          DecodeLevelPrefix
           DecodeTotalZeros
           DecodeRunBefore
           DecodeResidualBlockCavlc
@@ -370,8 +369,6 @@ static const u8 runBefore_1[2] = {0x11,0x01};
 
 static u32 DecodeCoeffToken(u32 bits, u32 nc);
 
-static u32 DecodeLevelPrefix(u32 bits);
-
 static u32 DecodeTotalZeros(u32 bits, u32 totalCoeff, u32 isChromaDC);
 
 static u32 DecodeRunBefore(u32 bits,u32 zerosLeft);
@@ -451,69 +448,6 @@ u32 DecodeCoeffToken(u32 bits, u32 nc)
     }
 
     return(value);
-
-}
-
-/*------------------------------------------------------------------------------
-
-    Function: DecodeLevelPrefix
-
-        Functional description:
-          Function to decode level_prefix information field from the stream
-
-        Inputs:
-          u32 bits      next 16 stream bits
-
-        Outputs:
-          u32  level_prefix information field or VLC_NOT_FOUND
-
-------------------------------------------------------------------------------*/
-
-u32 DecodeLevelPrefix(u32 bits)
-{
-
-/* Variables */
-
-    u32 numZeros;
-
-/* Code */
-
-    if (bits >= 0x8000)
-        numZeros = 0;
-    else if (bits >= 0x4000)
-        numZeros = 1;
-    else if (bits >= 0x2000)
-        numZeros = 2;
-    else if (bits >= 0x1000)
-        numZeros = 3;
-    else if (bits >= 0x0800)
-        numZeros = 4;
-    else if (bits >= 0x0400)
-        numZeros = 5;
-    else if (bits >= 0x0200)
-        numZeros = 6;
-    else if (bits >= 0x0100)
-        numZeros = 7;
-    else if (bits >= 0x0080)
-        numZeros = 8;
-    else if (bits >= 0x0040)
-        numZeros = 9;
-    else if (bits >= 0x0020)
-        numZeros = 10;
-    else if (bits >= 0x0010)
-        numZeros = 11;
-    else if (bits >= 0x0008)
-        numZeros = 12;
-    else if (bits >= 0x0004)
-        numZeros = 13;
-    else if (bits >= 0x0002)
-        numZeros = 14;
-    else if (bits >= 0x0001)
-        numZeros = 15;
-    else /* more than 15 zeros encountered which is an error */
-        return(VLC_NOT_FOUND);
-
-    return(numZeros);
 
 }
 
@@ -755,6 +689,7 @@ u32 h264bsdDecodeResidualBlockCavlc(
 /* Variables */
 
     u32 i, tmp, totalCoeff, trailingOnes, suffixLength, levelPrefix;
+    i32 levelCode;
     u32 levelSuffix, zerosLeft, bit;
     i32 level[16];
     u32 run[16];
@@ -810,43 +745,51 @@ u32 h264bsdDecodeResidualBlockCavlc(
 
         for (; i < totalCoeff; i++)
         {
-            BUFFER_SHOW(bufferValue, bufferBits, bit, 16);
-            levelPrefix = DecodeLevelPrefix(bit);
-            if (levelPrefix == VLC_NOT_FOUND)
-                return(HANTRO_NOK);
-            BUFFER_FLUSH(bufferValue, bufferBits, levelPrefix+1);
+            levelPrefix = 0;
 
-            if (levelPrefix < 14)
+            // Spec 9.2.2.1 limits `level_prefix` to not exceed 15 in Baseline profile,
+            // but Snapdragon hardware encoder sometimes writes 16.
+            BUFFER_SHOW(bufferValue, bufferBits, bit, 32);
+            while (!bit)
+            {
+                levelPrefix += 32;
+                bufferBits = 0;
+                BUFFER_SHOW(bufferValue, bufferBits, bit, 32);
+            }
+
+            levelPrefix += __builtin_clz(bit);
+            BUFFER_FLUSH(bufferValue, bufferBits, levelPrefix + 1);
+
+            // Calculate `levelSuffixSize`
+            if (levelPrefix == 14 && suffixLength == 0) {
+                tmp = 4;
+            } else if (levelPrefix >= 15) {
+                tmp = levelPrefix - 3;
+            } else {
                 tmp = suffixLength;
-            else if (levelPrefix == 14)
-            {
-                tmp = suffixLength ? suffixLength : 4;
-            }
-            else
-            {
-                /* setting suffixLength to 1 here corresponds to adding 15
-                 * to levelCode value if levelPrefix == 15 and
-                 * suffixLength == 0 */
-                if (!suffixLength)
-                    suffixLength = 1;
-                tmp = 12;
             }
 
-            if (suffixLength)
-                levelPrefix <<= suffixLength;
+            levelCode = (MIN(15, levelPrefix) << suffixLength);
 
             if (tmp)
             {
                 BUFFER_GET(bufferValue, bufferBits, levelSuffix, tmp);
-                levelPrefix += levelSuffix;
+                levelCode += levelSuffix;
+            }
+            else
+            {
+                levelSuffix = 0;
             }
 
-            tmp = levelPrefix;
+            if (levelPrefix >= 16)
+                levelCode += (1 << (levelPrefix - 3)) - 4096;
+            else if (levelPrefix >= 15 && suffixLength == 0)
+                levelCode += 15;
 
             if (i == trailingOnes && trailingOnes < 3)
-                tmp += 2;
+                levelCode += 2;
 
-            level[i] = (tmp+2)>>1;
+            level[i] = (levelCode + 2) >> 1;
 
             if (suffixLength == 0)
                 suffixLength = 1;
@@ -854,7 +797,7 @@ u32 h264bsdDecodeResidualBlockCavlc(
             if ((level[i] > (3 << (suffixLength - 1))) && suffixLength < 6)
                 suffixLength++;
 
-            if (tmp & 0x1)
+            if (levelCode & 0x1)
                 level[i] = -level[i];
         }
 
@@ -913,4 +856,3 @@ u32 h264bsdDecodeResidualBlockCavlc(
 
     return((totalCoeff << 4) | (levelSuffix << 16));
 }
-
