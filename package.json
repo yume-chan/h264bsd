@@ -1,6 +1,6 @@
 {
   "name": "@yume-chan/h264bsd",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "WebAssembly build of Android H264BSD decoder",
   "main": "index.js",
   "scripts": {},
